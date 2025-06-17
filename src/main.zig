@@ -2,9 +2,11 @@ const std = @import("std");
 const print = std.debug.print;
 const Child = std.process.Child;
 const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const mem = std.mem;
 
 pub fn executeCommand(allocator: std.mem.Allocator, command: []const u8) ![]const u8 {
+    // Split the command string into arguments
     var argv = ArrayList([]const u8).init(allocator);
     defer argv.deinit();
 
@@ -13,24 +15,29 @@ pub fn executeCommand(allocator: std.mem.Allocator, command: []const u8) ![]cons
         try argv.append(arg);
     }
 
+    // Initialize and spawn the child process
     var child = Child.init(argv.items, allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
-    var stdout = ArrayList(u8).init(allocator);
-    var stderr = ArrayList(u8).init(allocator);
-    defer stderr.deinit();
+    // Use unmanaged array lists for stdout/stderr to match collectOutput API
+    var stdout: ArrayListUnmanaged(u8) = .empty;
+    defer stdout.deinit(allocator);
+    var stderr: ArrayListUnmanaged(u8) = .empty;
+    defer stderr.deinit(allocator);
 
     try child.spawn();
-    try child.collectOutput(&stdout, &stderr, 1024);
+    try child.collectOutput(allocator, &stdout, &stderr, 1024);
     _ = try child.wait();
 
+    // If there was any stderr, append it to the stdout output
     if (stderr.items.len > 0) {
-        try stdout.appendSlice("\nErrors:\n");
-        try stdout.appendSlice(stderr.items);
+        try stdout.appendSlice(allocator, "\nErrors:\n");
+        try stdout.appendSlice(allocator, stderr.items);
     }
 
-    return stdout.toOwnedSlice();
+    // Return the collected stdout as a newly allocated slice
+    return try stdout.toOwnedSlice(allocator);
 }
 
 pub fn main() !void {
